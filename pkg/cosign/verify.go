@@ -163,6 +163,9 @@ type CheckOpts struct {
 	// Should the experimental OCI 1.1 behaviour be enabled or not.
 	// Defaults to false.
 	ExperimentalOCI11 bool
+
+	// Use the certificate DNs Common Names for the issuer and subject value
+	UseCommonNames bool
 }
 
 // This is a substitutable signature verification function that can be used for verifying
@@ -309,8 +312,14 @@ func CheckCertificatePolicy(cert *x509.Certificate, co *CheckOpts) error {
 	if err := validateCertExtensions(ce, co); err != nil {
 		return err
 	}
-	oidcIssuer := ce.GetIssuer()
-	sans := cryptoutils.GetSubjectAlternateNames(cert)
+
+	issuer := ce.GetIssuer()
+	subjects := cryptoutils.GetSubjectAlternateNames(cert)
+	if co.UseCommonNames {
+		issuer = cert.Issuer.CommonName
+		subjects = []string{cert.Subject.CommonName}
+	}
+
 	// If there are identities given, go through them and if one of them
 	// matches, call that good, otherwise, return an error.
 	if len(co.Identities) > 0 {
@@ -321,11 +330,11 @@ func CheckCertificatePolicy(cert *x509.Certificate, co *CheckOpts) error {
 			case identity.IssuerRegExp != "":
 				if regex, err := regexp.Compile(identity.IssuerRegExp); err != nil {
 					return fmt.Errorf("malformed issuer in identity: %s : %w", identity.IssuerRegExp, err)
-				} else if regex.MatchString(oidcIssuer) {
+				} else if regex.MatchString(issuer) {
 					issuerMatches = true
 				}
 			case identity.Issuer != "":
-				if identity.Issuer == oidcIssuer {
+				if identity.Issuer == issuer {
 					issuerMatches = true
 				}
 			default:
@@ -341,14 +350,14 @@ func CheckCertificatePolicy(cert *x509.Certificate, co *CheckOpts) error {
 				if err != nil {
 					return fmt.Errorf("malformed subject in identity: %s : %w", identity.SubjectRegExp, err)
 				}
-				for _, san := range sans {
+				for _, san := range subjects {
 					if regex.MatchString(san) {
 						subjectMatches = true
 						break
 					}
 				}
 			case identity.Subject != "":
-				for _, san := range sans {
+				for _, san := range subjects {
 					if san == identity.Subject {
 						subjectMatches = true
 						break
@@ -364,7 +373,7 @@ func CheckCertificatePolicy(cert *x509.Certificate, co *CheckOpts) error {
 			}
 		}
 		return &VerificationFailure{
-			fmt.Errorf("none of the expected identities matched what was in the certificate, got subjects [%s] with issuer %s", strings.Join(sans, ", "), oidcIssuer),
+			fmt.Errorf("none of the expected identities matched what was in the certificate, got subjects [%s] with issuer %s", strings.Join(subjects, ", "), issuer),
 		}
 	}
 	return nil
